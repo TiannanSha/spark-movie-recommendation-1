@@ -57,7 +57,7 @@ object Analyzer extends App {
     /userAvgRatings.count)  // *100?
   val allCloseUser = (ratioCloseUser==1)
 
-  // Q3.1.2
+  // Q3.1.3
   val itemRatingsMap = data.groupBy(r => r.item).map{case (item, rs) => (item, rs.map(r=>r.rating))}
   //userRatingsMap.take(10).foreach(println)
   // get a sequence of average ratings for each item
