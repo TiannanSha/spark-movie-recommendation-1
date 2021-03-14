@@ -49,27 +49,19 @@ object Predictor extends App {
   val globalPred = 3.0 // What is this??
   val globalMae = test.map(r => scala.math.abs(r.rating - globalPred)).reduce(_+_) / test.count.toDouble
 
-  // my code starts here
-  println("test take 8")
-  test.take(8).foreach(print)
 
-  // *** Q3.1.4 ***
-  // Note that some code might be duplicate for accurately measuring time cost in Q3.1.5
-  // That is, some intermediate results could have been reused.
+  // ****************************
+  // ***        Q3.1.4        ***
+  // ****************************
 
+  // Note that some intermediate results could have been reused, but for accurately measuring time cost
+  // in Q3.1.5, they are not reused
   val yTrue = test.map(r =>  r.rating)
   val rTrue = test.map(r => ((r.user, r.item),r.rating))
   assert(rTrue.count == test.count)
 
-  // yTrue is the RDD of actual ratings, yPred is the RDD of predicted ratings
-  def maeR(yTrue:RDD[Double], yPred:RDD[Double]): Double ={
-    assert(yTrue.count == yPred.count)
-    val zipped = yTrue.zip(yPred)
-    //joined.take(8).foreach(print)
-    zipped.map(zipped => scala.math.abs(zipped._1 - zipped._2)).sum() / yTrue.count.toDouble
-  }
-
-  // both rTrue and rPred are in the form of ((u, i), r)
+  // both rTrue and rPred are in the form of ((u, i), r), (u,i) is the unique key
+  // rTure's r is the actual rating, rPred's r is the predicted rating
   def maeUIR(rTrue:RDD[((Int, Int), Double)], rPred:RDD[((Int, Int), Double)]): Double = {
     assert(rTrue.count == rPred.count)
     val joined = rTrue.join(rPred)  // ((u,i), (r_true, r_pred))
@@ -80,16 +72,18 @@ object Predictor extends App {
     return maeRdd0.sum/rTrue.count.toDouble
   }
 
-  // MAE for global method, use training set's global average to predict each rating in test set
-  def calcRPredGlobal(trainRdd:RDD[Rating], testRdd:RDD[Rating]):RDD[Double] = {
+  // *** Global Average Method ***
+  // use training set's global average to predict each rating in test set
+  def calcRPredGlobal(trainRdd:RDD[Rating], testRdd:RDD[Rating]):RDD[((Int, Int),Double)] = {
     val avgGlobal = train.map(r => r.rating).sum()/train.count.toDouble
-    test.map(r => avgGlobal)
+    test.map(r => ((r.user, r.item), avgGlobal))
   }
-  val yPredGlobal = calcRPredGlobal(train, test)
-  val maeGlobalMethod = maeR(yTrue, yPredGlobal)
+  val rPredGlobal = calcRPredGlobal(train, test)
+  val maeGlobalMethod = maeUIR(rTrue, rPredGlobal)
 
-  // MAE for per user method, for a test (u,i), if there ratings in training set with same u
-  // then use the average of such rating to predict, otherwise use global average
+  // *** Average Per User Method ***
+  // for a test (u,i), if there ratings in training set with same u
+  // then use the average of such ratings to predict, otherwise use global average
   def calcRPredPerUserMethod(trainRdd:RDD[Rating], testRdd:RDD[Rating]):RDD[((Int, Int),Double)] = {
     val avgGlobal = train.map(r => r.rating).sum()/train.count.toDouble
     val ru_s = train.groupBy(r => r.user).map{
@@ -106,9 +100,11 @@ object Predictor extends App {
   val maePerUserMethod = maeUIR(rTrue, rPredPerUserMethod)
 
 
-  // MAE for per item method
-  // (i, [Rating]) ->  (i, [r]) -> (i, [r].sum/r.size)
+  // *** per item method ***
+  // for a test (u,i), if there ratings in training set with same i
+  // then use the average of such ratings to predict, otherwise use global average
   def calcRPredPerItemMethod(trainRdd:RDD[Rating], testRdd:RDD[Rating]):RDD[((Int, Int),Double)] = {
+    // (i, [Rating]) ->  (i, [r]) -> (i, [r].sum/r.size)
     val avgGlobal = train.map(r => r.rating).sum()/train.count.toDouble
     val r_is = train.groupBy(r => r.item).map{
       case (item, rs) => (item, rs.map(r=>r.rating).sum / rs.size.toDouble)
@@ -124,7 +120,8 @@ object Predictor extends App {
   val maePerItemMethod = maeUIR(rTrue, rPredPerItemMethod)
 
 
-  // **** baseline method ****
+  // *** the baseline method ***
+  // as explained in the project specification
   def calcRPredBaselineMethod(trainRdd:RDD[Rating], testRdd:RDD[Rating]):RDD[((Int, Int),Double)] = {
     // find avgGlobal and ru_s
     val avgGlobal = train.map(r => r.rating).sum()/train.count.toDouble
@@ -156,7 +153,7 @@ object Predictor extends App {
   val rPredBaselineMethod = calcRPredBaselineMethod(train, test)
   val maeBaselineMethod = maeUIR(rTrue, rPredBaselineMethod)
 
-
+  // Some helper functions for the baseline method
   // generate a prediction for (u,i) using ru_ and rbarhat_i while any of
   // these two inputs might be None, in which case the prediction will be the global average
   def optionalPui(ru:Option[Double], rbarhat_i:Option[Double], defaultPui:Double):Double = {
@@ -187,7 +184,57 @@ object Predictor extends App {
     }
   }
 
-  // **** Q3.1.5 ****
+  // ****************************
+  // ***        Q3.1.5        ***
+  // ****************************
+
+  // for a given predictive method, run it for turn times, time each run and
+  // return ten durations in a RDD[Long] in microseconds
+  def timeMethod(methodFunc:(RDD[Rating], RDD[Rating])=>RDD[((Int, Int), Double)],
+                train:RDD[Rating], test:RDD[Rating]) : RDD[Double] = {
+    var timeListGlobalMethod = List[Double]()
+    for (i <- 1 to 10) {
+      val start = System.nanoTime()
+      methodFunc(train, test)
+      val end = System.nanoTime()
+      // divide by 1000 to turn nano seconds to microseconds
+      timeListGlobalMethod = timeListGlobalMethod :+ (end-start)/1000.0
+    }
+    spark.sparkContext.parallelize(timeListGlobalMethod)
+  }
+
+  // *** measure global average method's duration ***
+  val timeRddGlobalMethod = timeMethod(calcRPredGlobal, train, test)
+
+  // *** measure per user method's duration ***
+  val timeRddPerUserMethod = timeMethod(calcRPredPerUserMethod, train, test)
+
+  // *** measure per item method's duration ***
+  val timeRddPerItemMethod = timeMethod(calcRPredPerItemMethod, train, test)
+
+  // *** measure baseline method's duration ***
+  val timeRddBaselineMethod = timeMethod(calcRPredBaselineMethod, train, test)
+
+
+
+//  var timeListGlobalMethod = List[Long]()
+//  for (i <- 1 to 10) {
+//    val start = System.nanoTime()
+//    calcRPredGlobal(train, test)
+//    val end = System.nanoTime()
+//    timeListGlobalMethod = timeListGlobalMethod :+ (end-start)
+//  }
+//  val timeRddGlobalMethod = spark.sparkContext.parallelize(timeListGlobalMethod)
+
+  // *** measure per user method's duration ***
+//  var timeListPerUserMethod = List[Long]()
+//  for (i <- 1 to 10) {
+//    val start = System.nanoTime()
+//    calcRPredGlobal(train, test)
+//    val end = System.nanoTime()
+//    timeListPerUserMethod = timeListPerUserMethod :+ (end-start)
+//  }
+//  val timeRddPerUserMethod = spark.sparkContext.parallelize(timeListPerUserMethod)
 
   // Save answers as JSON
   def printToFile(content: String, 
@@ -214,30 +261,31 @@ object Predictor extends App {
 
             "Q3.1.5" -> Map(
               "DurationInMicrosecForGlobalMethod" -> Map(
-                "min" -> 0.0,  // Datatype of answer: Double
-                "max" -> 0.0,  // Datatype of answer: Double
-                "average" -> 0.0, // Datatype of answer: Double
-                "stddev" -> 0.0 // Datatype of answer: Double
+                "min" -> timeRddGlobalMethod.min,  // Datatype of answer: Double
+                "max" -> timeRddGlobalMethod.max,  // Datatype of answer: Double
+                "average" -> timeRddGlobalMethod.mean, // Datatype of answer: Double
+                "stddev" -> timeRddGlobalMethod.stdev// Datatype of answer: Double
               ),
               "DurationInMicrosecForPerUserMethod" -> Map(
-                "min" -> 0.0,  // Datatype of answer: Double
-                "max" -> 0.0,  // Datatype of answer: Double
-                "average" -> 0.0, // Datatype of answer: Double
-                "stddev" -> 0.0 // Datatype of answer: Double
+                "min" -> timeRddPerUserMethod.min,  // Datatype of answer: Double
+                "max" -> timeRddPerUserMethod.max,  // Datatype of answer: Double
+                "average" -> timeRddPerUserMethod.mean, // Datatype of answer: Double
+                "stddev" -> timeRddPerUserMethod.stdev // Datatype of answer: Double
               ),
               "DurationInMicrosecForPerItemMethod" -> Map(
-                "min" -> 0.0,  // Datatype of answer: Double
-                "max" -> 0.0,  // Datatype of answer: Double
-                "average" -> 0.0, // Datatype of answer: Double
-                "stddev" -> 0.0 // Datatype of answer: Double
+                "min" -> timeRddPerItemMethod.min,  // Datatype of answer: Double
+                "max" -> timeRddPerItemMethod.max,  // Datatype of answer: Double
+                "average" -> timeRddPerItemMethod.mean, // Datatype of answer: Double
+                "stddev" -> timeRddPerItemMethod.stdev // Datatype of answer: Double
               ),
               "DurationInMicrosecForBaselineMethod" -> Map(
-                "min" -> 0.0,  // Datatype of answer: Double
-                "max" -> 0.0, // Datatype of answer: Double
-                "average" -> 0.0, // Datatype of answer: Double
-                "stddev" -> 0.0 // Datatype of answer: Double
+                "min" -> timeRddBaselineMethod.min,  // Datatype of answer: Double
+                "max" -> timeRddBaselineMethod.max,  // Datatype of answer: Double
+                "average" -> timeRddBaselineMethod.mean, // Datatype of answer: Double
+                "stddev" -> timeRddBaselineMethod.stdev // Datatype of answer: Double
               ),
-              "RatioBetweenBaselineMethodAndGlobalMethod" -> 0.0 // Datatype of answer: Double
+              "RatioBetweenBaselineMethodAndGlobalMethod" -> (
+                timeRddBaselineMethod.mean/timeRddGlobalMethod.mean) // Datatype of answer: Double
             ),
          )
         json = Serialization.writePretty(answers)
