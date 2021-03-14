@@ -63,9 +63,6 @@ object Predictor extends App {
     val zipped = yTrue.zip(yPred)
     //joined.take(8).foreach(print)
     zipped.map(zipped => scala.math.abs(zipped._1 - zipped._2)).sum() / yTrue.count.toDouble
-//    joined.map{
-//      case (_, (rTrue, rPred)) => scala.math.abs(rTrue - rPred)
-//    }.sum() / u_yTrue.count.toDouble
   }
 
   // both rTrue and rPred are in the form of ((u, i), rating)
@@ -83,7 +80,6 @@ object Predictor extends App {
   val avgGlobal = train.map(r => r.rating).sum()/train.count.toDouble
   val yPredGlobal = test.map(r => avgGlobal)
   val MaeGlobalMethod = MAE(yTrue, yPredGlobal)
-  println(s"MAE(yTrue, yTrue) = ${MAE(yTrue, yTrue)}")
 
   // MAE for per user method, for a test (u,i), if there ratings in training set with same u
   // then use the average of such rating to predict, otherwise use global average
@@ -114,23 +110,8 @@ object Predictor extends App {
   val maePerItemMethod = mae(rTrue, rPredPerItemMethod)
 
 
-  // baseline method
-  // attempt to use
-//  val rdd1 = train.map(r=>(r.item, r)) // (item2, r)
-//  val rdd2 = rdd1.groupByKey // (item2, [r1,r2,...])
-//  val rdd3 = rdd2.mapValues(rs=>rs.map(r=>(r.user, r.rating))) // (item2, [(u1, rating1), (u2,rating2), ...])
-//  val rdd4 = rdd3.mapValues(u_r_s => spark.sparkContext.parallelize(u_r_s.toSeq))
-//  // rdd4 entry: (item2, RDD((u1, r12),(u2,r22),...)])
-//  val rdd5 = rdd4.mapValues(u_r_s=>u_r_s.join(avgRPerUser))
-//  // rdd5 entry: (  item2, RDD( (u1,(r12, avgR_u1)), (u2,(r22, avgR_u2)),...)   )
-//  val rdd6 = rdd5.mapValues{
-//    rdd => rdd.mapValues{case(rui, ru)=>normalDevi(rui, ru)}
-//  } // rdd6 entry (   item2, RDD( (u1,rhat_u1_i2 ), (u2, rhat_u2_i2) )       )
-//  val rdd7 = rdd6.mapValues{rdd=>rdd.values.sum}
-//  //rdd7 entry ( item2, rhatbar_i2 )
-//  println("befroe print rdd7...")
-//  rdd7.take(10).foreach(println)
-
+  // **** baseline method ****
+  // find rHatBar_i for all is
   val rdd1 = train.map(r=>(r.user, (r.item, r.rating)))   // entry: (u, (i, rui))
   val rdd2 = rdd1.join(ru_s)  // entry (u, ((i, rui), ru_))
   val rdd3 = rdd2.map{case(  u, ((i, rui),ru_)  ) => ( i, (normalDevi(rui,ru_),1) )} // (i, (rhat_ui, 1))
@@ -140,52 +121,17 @@ object Predictor extends App {
   val rHatBar_i = rdd3.reduceByKey((t1,t2)=>(t1._1+t2._1, t1._2+t2._2)).mapValues{
     case(sum, count) => sum/count.toDouble
   }
-//  println()
-//  rHatBar_i.take(10).foreach(println)
-//  val debugRHatBar_i = rHatBar_i.map(t=>(t._2, t._1))
-//  println(s"debugRHatBar_i.max=${debugRHatBar_i.max}")
-//  println(s"debugRHatBar_i.min=${debugRHatBar_i.min}")
-//  println()
+
   // now combine rHatBar_i and ru_ for each entry in the testset
   val rdd4 = test.map{r=>(r.item, r.user)}.leftOuterJoin(rHatBar_i) // (i, (u1, Option(rhatbar_i)))
-  println("rdd4: (i, (u, Option(rhatbar_i)))")
-  rdd4.take(10).foreach(println)
-  println()
   val rdd5 = rdd4.map{
     case(i, (u, rbarhat_i)) => (u, (i, rbarhat_i))
   } // (u, (i, Option(rbarhat_i))
-  // debug
-//  val rddDebug0 = rdd5.map{case(u, (i, riOrGA))=>riOrGA}
-//  println("rbarhatiOrGA")
-//  rddDebug0.take(10).foreach(println)
-//  println(s"rbarhatiOrGA max = ${rddDebug0.max}")
-//  println(s"rbarhatiOrGA min = ${rddDebug0.min}")
-//  println()
-  // debug
   val rdd6 = rdd5.leftOuterJoin(ru_s) // (   u, ( (i, rbarhat_i/GA), option(ru_) )   )
   val rPredBaselineMethod = rdd6.map{
     case( u, (  (i,rbarhat_i), ru  ) ) => ( (u,i), optionalPui(ru, rbarhat_i) )
   }  // ((u,i), pui)
-//  println("ru_s: (u, ru_)")
-//  ru_s.take(10).foreach(println)
-//  val debugRu_s = ru_s.map{case(u, ru)=>ru}
-//  println(s"ru_s.max=${debugRu_s.max}")
-//  println(s"ru_s.min=${debugRu_s.min}")
-//  println()
-//  println("rdd7: ((u,i),pui)")
-//  rdd7.take(10).foreach(println)
-//  val rddDebugPui = rdd7.map{case((u,i),pui)=>pui}
-//  println(s"pui max=${rddDebugPui.max}")
-//  println(s"pui min=${rddDebugPui.min}")
-//  println()
-//  val rdd8 = test.map(r=>((r.user, r.item),1))  // ((u,i),1)
-//  assert(rdd8.count == rdd7.count)
-//  val rdd9 = rdd8.join(rdd7)   // ((u,i), (1,pui))
-//  val rPredBaseline = rdd9.map{
-//    case((u,i),(one, pui)) => (())
-//  }
   val maeBaselineMethod = mae(rTrue, rPredBaselineMethod)
-  //println(s"MaeBaseline = $maeBaseline")
 
   // generate a prediction for (u,i) using ru_ and rbarhat_i while any of
   // these two inputs might be None, in which case the prediction will be the global average
