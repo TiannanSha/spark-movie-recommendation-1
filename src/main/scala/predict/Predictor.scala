@@ -55,6 +55,9 @@ object Predictor extends App {
 
   // *** Q3.1.4 ***
   val yTrue = test.map(r =>  r.rating)
+  val rTrue = test.map(r => ((r.user, r.item),r.rating))
+  assert(rTrue.count == test.count)
+
   def MAE(yTrue:RDD[Double], yPred:RDD[Double]): Double ={
     assert(yTrue.count == yPred.count)
     val zipped = yTrue.zip(yPred)
@@ -65,60 +68,154 @@ object Predictor extends App {
 //    }.sum() / u_yTrue.count.toDouble
   }
 
-  // MAE global method, use training set's global average to predict each rating in test set
+  // both rTrue and rPred are in the form of ((u, i), rating)
+  def mae(rTrue:RDD[((Int, Int), Double)], rPred:RDD[((Int, Int), Double)]): Double = {
+    assert(rTrue.count == rPred.count)
+    val joined = rTrue.join(rPred)  // ((u,i), (r_true, r_pred))
+    val maeRdd0 = joined.map{
+      case((u,i), (r_true, r_pred))=>scala.math.abs(r_true-r_pred)
+    }
+    assert(rTrue.count == maeRdd0.count)
+    return maeRdd0.sum/rTrue.count.toDouble
+  }
+
+  // MAE for global method, use training set's global average to predict each rating in test set
   val avgGlobal = train.map(r => r.rating).sum()/train.count.toDouble
   val yPredGlobal = test.map(r => avgGlobal)
   val MaeGlobalMethod = MAE(yTrue, yPredGlobal)
   println(s"MAE(yTrue, yTrue) = ${MAE(yTrue, yTrue)}")
 
-  // MAE per user method, for a test (u,i), if there ratings in training set with same u
+  // MAE for per user method, for a test (u,i), if there ratings in training set with same u
   // then use the average of such rating to predict, otherwise use global average
-  val avgRByU = train.groupBy(r => r.user).map{
+  val ru_s = train.groupBy(r => r.user).map{
     case (user, rs) => (user, rs.map(r=>r.rating).sum / rs.size.toDouble)
-  }
+  }  // (u, ru_)
 
-//  def predict(r:Rating): Double = {
-//    val pred = avgRByU.lookup(r.user)
-//    if (pred.size > 0) return pred(0) else avgGlobal
-//  }
-//  println("before lookup")
-  //val yPredPerUser = test.map(_=>0.0)
-  //val MaePerUserMethod = MAE(yTrue, yPredPerUser)
-
-  // test = [(1, mv1), (1, mv2), (2, mv3), (4,mv5)]
-  // e.g. testMapped = [(1, GloAvg), (1, GA), (2, GA), (4,GA)]
-  //    avgRbyU = [(1, 3.3), (2, 3.9), (3, 4.0)]
-  //  joined = [(1, (GA, 3.3)), (1, (GA, 3.3)), (2, (GA, 3.9)), (4, (GA, None))]
-  val testMappedUser = test.map(r=>(r.user, avgGlobal))
-  val joinedUser = testMappedUser.leftOuterJoin(avgRByU)
-  val yPredPerUser = joinedUser.map{
-    case(_, (_, Some(rating))) => rating
-    case(_, (gloAvg, None)) => gloAvg
-  }
-  val MaePerUserMethod = MAE(yTrue, yPredPerUser)
-  println(s"MaePerUserMethod = $MaePerUserMethod")
+  val rddPum0 = test.map(r=>(r.user, r.item)) // (u,i)
+  val rddPum1 = rddPum0.leftOuterJoin(ru_s) // (u,(i,Option(ru_)))
+  val rPredPerUserMethod = rddPum1.map{
+    case(  u, (i, Some(ru))  ) => ((u,i), ru)
+    case(  u, (i, None)  ) => ((u,i), avgGlobal)
+  } // ((u,i), ru/avgGlobal)
+  val maePerUserMethod = mae(rTrue, rPredPerUserMethod)
 
 
-
-  //val yPredPerUser = test.map(_ => stats.Analyzer.userAvgRatingsAvg)
-//  val yPredPerUser = stats.Analyzer.userAvgRatings
-//  val MaePerUserMethod = MAE(yTrue, yPredPerUser)
-//  // MAE per item method
-//  val yPredPerItem = stats.Analyzer.itemAvgRatings
-//  val MaePerItemMethod = MAE(yTrue, yPredPerItem)
-  val avgRByI = train.groupBy(r => r.item).map{
+  // MAE for per item method
+  // (i, [Rating]) ->  (i, [r]) -> (i, [r].sum/r.size)
+  val r_is = train.groupBy(r => r.item).map{
     case (item, rs) => (item, rs.map(r=>r.rating).sum / rs.size.toDouble)
-  }
-  val testMappedItem = test.map(r=>(r.item, avgGlobal))
-  val joinedItem = testMappedItem.leftOuterJoin(avgRByI)
-  val yPredPerItem = joinedItem.map{
-    case(_, (_, Some(rating))) => rating
-    case(_, (gloAvg, None)) => gloAvg
-  }
-  val MaePerItemMethod = MAE(yTrue, yPredPerItem)
-  println(s"MaePerItemMethod = $MaePerItemMethod")
+  } // (i, r_i)
+  val rddPim0 = test.map(r=>(r.item, r.user))  // (i, u)
+  val rddPim1 = rddPim0.leftOuterJoin(r_is)  // (i, (u, Option(r_i)))
+  val rPredPerItemMethod = rddPim1.map{
+    case(i, (u, Some(r_i))) => ((u,i), r_i)
+    case(i, (u, None)) => ((u,i), avgGlobal)
+  } // ((u,i), r_i/avgGlobal)
+  val maePerItemMethod = mae(rTrue, rPredPerItemMethod)
 
 
+  // baseline method
+  // attempt to use
+//  val rdd1 = train.map(r=>(r.item, r)) // (item2, r)
+//  val rdd2 = rdd1.groupByKey // (item2, [r1,r2,...])
+//  val rdd3 = rdd2.mapValues(rs=>rs.map(r=>(r.user, r.rating))) // (item2, [(u1, rating1), (u2,rating2), ...])
+//  val rdd4 = rdd3.mapValues(u_r_s => spark.sparkContext.parallelize(u_r_s.toSeq))
+//  // rdd4 entry: (item2, RDD((u1, r12),(u2,r22),...)])
+//  val rdd5 = rdd4.mapValues(u_r_s=>u_r_s.join(avgRPerUser))
+//  // rdd5 entry: (  item2, RDD( (u1,(r12, avgR_u1)), (u2,(r22, avgR_u2)),...)   )
+//  val rdd6 = rdd5.mapValues{
+//    rdd => rdd.mapValues{case(rui, ru)=>normalDevi(rui, ru)}
+//  } // rdd6 entry (   item2, RDD( (u1,rhat_u1_i2 ), (u2, rhat_u2_i2) )       )
+//  val rdd7 = rdd6.mapValues{rdd=>rdd.values.sum}
+//  //rdd7 entry ( item2, rhatbar_i2 )
+//  println("befroe print rdd7...")
+//  rdd7.take(10).foreach(println)
+
+  val rdd1 = train.map(r=>(r.user, (r.item, r.rating)))   // entry: (u, (i, rui))
+  val rdd2 = rdd1.join(ru_s)  // entry (u, ((i, rui), ru_))
+  val rdd3 = rdd2.map{case(  u, ((i, rui),ru_)  ) => ( i, (normalDevi(rui,ru_),1) )} // (i, (rhat_ui, 1))
+  // after groupby it's (i, [(rhat_u1_i,1), (rhat_u2_i,1), ...])
+  // for better performance we reduce directly
+  // after reduce: (i, (rhat_ui+rhat_u2i2+..., 1+1+...))
+  val rHatBar_i = rdd3.reduceByKey((t1,t2)=>(t1._1+t2._1, t1._2+t2._2)).mapValues{
+    case(sum, count) => sum/count.toDouble
+  }
+//  println()
+//  rHatBar_i.take(10).foreach(println)
+//  val debugRHatBar_i = rHatBar_i.map(t=>(t._2, t._1))
+//  println(s"debugRHatBar_i.max=${debugRHatBar_i.max}")
+//  println(s"debugRHatBar_i.min=${debugRHatBar_i.min}")
+//  println()
+  // now combine rHatBar_i and ru_ for each entry in the testset
+  val rdd4 = test.map{r=>(r.item, r.user)}.leftOuterJoin(rHatBar_i) // (i, (u1, Option(rhatbar_i)))
+  println("rdd4: (i, (u, Option(rhatbar_i)))")
+  rdd4.take(10).foreach(println)
+  println()
+  val rdd5 = rdd4.map{
+    case(i, (u, rbarhat_i)) => (u, (i, rbarhat_i))
+  } // (u, (i, Option(rbarhat_i))
+  // debug
+//  val rddDebug0 = rdd5.map{case(u, (i, riOrGA))=>riOrGA}
+//  println("rbarhatiOrGA")
+//  rddDebug0.take(10).foreach(println)
+//  println(s"rbarhatiOrGA max = ${rddDebug0.max}")
+//  println(s"rbarhatiOrGA min = ${rddDebug0.min}")
+//  println()
+  // debug
+  val rdd6 = rdd5.leftOuterJoin(ru_s) // (   u, ( (i, rbarhat_i/GA), option(ru_) )   )
+  val rPredBaselineMethod = rdd6.map{
+    case( u, (  (i,rbarhat_i), ru  ) ) => ( (u,i), optionalPui(ru, rbarhat_i) )
+  }  // ((u,i), pui)
+//  println("ru_s: (u, ru_)")
+//  ru_s.take(10).foreach(println)
+//  val debugRu_s = ru_s.map{case(u, ru)=>ru}
+//  println(s"ru_s.max=${debugRu_s.max}")
+//  println(s"ru_s.min=${debugRu_s.min}")
+//  println()
+//  println("rdd7: ((u,i),pui)")
+//  rdd7.take(10).foreach(println)
+//  val rddDebugPui = rdd7.map{case((u,i),pui)=>pui}
+//  println(s"pui max=${rddDebugPui.max}")
+//  println(s"pui min=${rddDebugPui.min}")
+//  println()
+//  val rdd8 = test.map(r=>((r.user, r.item),1))  // ((u,i),1)
+//  assert(rdd8.count == rdd7.count)
+//  val rdd9 = rdd8.join(rdd7)   // ((u,i), (1,pui))
+//  val rPredBaseline = rdd9.map{
+//    case((u,i),(one, pui)) => (())
+//  }
+  val maeBaselineMethod = mae(rTrue, rPredBaselineMethod)
+  //println(s"MaeBaseline = $maeBaseline")
+
+  // generate a prediction for (u,i) using ru_ and rbarhat_i while any of
+  // these two inputs might be None, in which case the prediction will be the global average
+  def optionalPui(ru:Option[Double], rbarhat_i:Option[Double]):Double = {
+    if (ru.isEmpty || rbarhat_i.isEmpty) {
+      return avgGlobal
+    } else {
+      return pui(ru.get, rbarhat_i.get)
+    }
+  }
+
+  // generate a prediction for (u,i) using ru_ and rbarhat_i
+  def pui(ru:Double, rbarhat_i:Double):Double = {
+    ru + rbarhat_i * scale((ru+rbarhat_i), ru)
+  }
+
+  // normalizedDeviation
+  def normalDevi(rui:Double, ru:Double): Double = {
+    (rui - ru)/scale(rui, ru)
+  }
+
+  def scale(x:Double, ru:Double): Double = {
+    if (x>ru) {
+      5-ru
+    } else if (x<ru) {
+      ru-1
+    }else {
+      1
+    }
+  }
 
   // **** Q3.1.5 ****
 
@@ -140,9 +237,9 @@ object Predictor extends App {
         val answers: Map[String, Any] = Map(
             "Q3.1.4" -> Map(
               "MaeGlobalMethod" -> MaeGlobalMethod, // Datatype of answer: Double
-              "MaePerUserMethod" -> MaePerUserMethod, // Datatype of answer: Double
-              "MaePerItemMethod" -> MaePerItemMethod, // Datatype of answer: Double
-              "MaeBaselineMethod" -> 0.0 // Datatype of answer: Double
+              "MaePerUserMethod" -> maePerUserMethod, // Datatype of answer: Double
+              "MaePerItemMethod" -> maePerItemMethod, // Datatype of answer: Double
+              "MaeBaselineMethod" -> maeBaselineMethod // Datatype of answer: Double
             ),
 
             "Q3.1.5" -> Map(
