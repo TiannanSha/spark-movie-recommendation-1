@@ -74,7 +74,7 @@ object Predictor extends App {
 
   // *** Global Average Method ***
   // use training set's global average to predict each rating in test set
-  def calcRPredGlobal(trainRdd:RDD[Rating], testRdd:RDD[Rating]):RDD[((Int, Int),Double)] = {
+  def calcRPredGlobal(train:RDD[Rating], test:RDD[Rating]):RDD[((Int, Int),Double)] = {
     val avgGlobal = train.map(r => r.rating).sum()/train.count.toDouble
     test.map(r => ((r.user, r.item), avgGlobal))
   }
@@ -84,12 +84,12 @@ object Predictor extends App {
   // *** Average Per User Method ***
   // for a test (u,i), if there ratings in training set with same u
   // then use the average of such ratings to predict, otherwise use global average
-  def calcRPredPerUserMethod(trainRdd:RDD[Rating], testRdd:RDD[Rating]):RDD[((Int, Int),Double)] = {
+  def calcRPredPerUserMethod(train:RDD[Rating], test:RDD[Rating]):RDD[((Int, Int),Double)] = {
     val avgGlobal = train.map(r => r.rating).sum()/train.count.toDouble
     val ru_s = train.groupBy(r => r.user).map{
       case (user, rs) => (user, rs.map(r=>r.rating).sum / rs.size.toDouble)
     }  // (u, ru_)
-    val rddPum0 = test.map(r=>(r.user, r.item)) // (u,i)
+    val rddPum0 = test.map(r=>(r.user, r.item)) // (u,i)`
     val rddPum1 = rddPum0.leftOuterJoin(ru_s) // (u,(i,Option(ru_)))
     rddPum1.map{
       case(  u, (i, Some(ru))  ) => ((u,i), ru)
@@ -103,7 +103,7 @@ object Predictor extends App {
   // *** per item method ***
   // for a test (u,i), if there ratings in training set with same i
   // then use the average of such ratings to predict, otherwise use global average
-  def calcRPredPerItemMethod(trainRdd:RDD[Rating], testRdd:RDD[Rating]):RDD[((Int, Int),Double)] = {
+  def calcRPredPerItemMethod(train:RDD[Rating], test:RDD[Rating]):RDD[((Int, Int),Double)] = {
     // (i, [Rating]) ->  (i, [r]) -> (i, [r].sum/r.size)
     val avgGlobal = train.map(r => r.rating).sum()/train.count.toDouble
     val r_is = train.groupBy(r => r.item).map{
@@ -119,10 +119,41 @@ object Predictor extends App {
   val rPredPerItemMethod = calcRPredPerItemMethod(train, test)
   val maePerItemMethod = maeUIR(rTrue, rPredPerItemMethod)
 
-
+  //TODO: delete redundant rdd12345 variables change it to new line .func()
   // *** the baseline method ***
   // as explained in the project specification
-  def calcRPredBaselineMethod(trainRdd:RDD[Rating], testRdd:RDD[Rating]):RDD[((Int, Int),Double)] = {
+//  def calcRPredBaselineMethod(train:RDD[Rating], test:RDD[Rating]):RDD[((Int, Int),Double)] = {
+//
+//    // find avgGlobal and ru_s
+//    val avgGlobal = train.map(r => r.rating).sum()/train.count.toDouble
+//    val ru_s = train.groupBy(r => r.user).map{
+//      case (user, rs) => (user, rs.map(r=>r.rating).sum / rs.size.toDouble)
+//    }  // (u, ru_)
+//
+//    // find rHatBar_i for all is
+//    val rdd1 = train.map(r=>(r.user, (r.item, r.rating)))   // entry: (u, (i, rui))
+//    val rdd2 = rdd1.join(ru_s)  // entry (u, ((i, rui), ru_))
+//    val rdd3 = rdd2.map{case(  u, ((i, rui),ru_)  ) => ( i, (normalDevi(rui,ru_),1) )} // (i, (rhat_ui, 1))
+//    // after groupby it's (i, [(rhat_u1_i,1), (rhat_u2_i,1), ...])
+//    // for better performance we reduce directly
+//    // after reduce: (i, (rhat_ui+rhat_u2i2+..., 1+1+...))
+//    val rHatBar_i = rdd3.reduceByKey((t1,t2)=>(t1._1+t2._1, t1._2+t2._2)).mapValues{
+//      case(sum, count) => sum/count.toDouble
+//    }  // (i, rhatbar_i)
+//
+//    // now combine rHatBar_i and ru_ for each entry in the testset
+//    val rdd4 = test.map{r=>(r.item, r.user)}.leftOuterJoin(rHatBar_i) // (i, (u1, Option(rhatbar_i)))
+//    val rdd5 = rdd4.map{
+//      case(i, (u, rbarhat_i)) => (u, (i, rbarhat_i))
+//    } // (u, (i, Option(rbarhat_i))
+//    val rdd6 = rdd5.leftOuterJoin(ru_s) // (   u, ( (i, Option(rbarhat_i)), option(ru_) )   )
+//    rdd6.map{
+//      case( u, (  (i,rbarhat_i), ru  ) ) => ( (u,i), optionalPui(ru, rbarhat_i, avgGlobal) )
+//    }  // ((u,i), pui)
+//  }
+  // *** the baseline method ***
+  // as explained in the project specification
+  def calcRPredBaselineMethod(train:RDD[Rating], test:RDD[Rating]):RDD[((Int, Int),Double)] = {
 
     // find avgGlobal and ru_s
     val avgGlobal = train.map(r => r.rating).sum()/train.count.toDouble
@@ -132,24 +163,23 @@ object Predictor extends App {
 
     // find rHatBar_i for all is
     val rdd1 = train.map(r=>(r.user, (r.item, r.rating)))   // entry: (u, (i, rui))
-    val rdd2 = rdd1.join(ru_s)  // entry (u, ((i, rui), ru_))
-    val rdd3 = rdd2.map{case(  u, ((i, rui),ru_)  ) => ( i, (normalDevi(rui,ru_),1) )} // (i, (rhat_ui, 1))
+      .join(ru_s)  // entry (u, ((i, rui), ru_))
+      .map{case(  u, ((i, rui),ru_)  ) => ( i, (normalDevi(rui,ru_),1) )} // (i, (rhat_ui, 1))
     // after groupby it's (i, [(rhat_u1_i,1), (rhat_u2_i,1), ...])
-    // for better performance we reduce directly
     // after reduce: (i, (rhat_ui+rhat_u2i2+..., 1+1+...))
-    val rHatBar_i = rdd3.reduceByKey((t1,t2)=>(t1._1+t2._1, t1._2+t2._2)).mapValues{
+    val rHatBar_i = rdd1.reduceByKey((t1,t2)=>(t1._1+t2._1, t1._2+t2._2)).mapValues{
       case(sum, count) => sum/count.toDouble
     }  // (i, rhatbar_i)
 
     // now combine rHatBar_i and ru_ for each entry in the testset
-    val rdd4 = test.map{r=>(r.item, r.user)}.leftOuterJoin(rHatBar_i) // (i, (u1, Option(rhatbar_i)))
-    val rdd5 = rdd4.map{
-      case(i, (u, rbarhat_i)) => (u, (i, rbarhat_i))
-    } // (u, (i, Option(rbarhat_i))
-    val rdd6 = rdd5.leftOuterJoin(ru_s) // (   u, ( (i, Option(rbarhat_i)), option(ru_) )   )
-    rdd6.map{
-      case( u, (  (i,rbarhat_i), ru  ) ) => ( (u,i), optionalPui(ru, rbarhat_i, avgGlobal) )
-    }  // ((u,i), pui)
+    test.map{r=>(r.item, r.user)}.leftOuterJoin(rHatBar_i) // (i, (u1, Option(rhatbar_i)))
+      .map{
+        case(i, (u, rbarhat_i)) => (u, (i, rbarhat_i))
+      } // (u, (i, Option(rbarhat_i))
+      .leftOuterJoin(ru_s) // (   u, ( (i, Option(rbarhat_i)), option(ru_) )   )
+      .map{
+        case( u, (  (i,rbarhat_i), ru  ) ) => ( (u,i), optionalPui(ru, rbarhat_i, avgGlobal) )
+      }  // ((u,i), pui)
   }
   val rPredBaselineMethod = calcRPredBaselineMethod(train, test)
   val maeBaselineMethod = maeUIR(rTrue, rPredBaselineMethod)
