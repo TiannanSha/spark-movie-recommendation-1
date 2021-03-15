@@ -123,6 +123,7 @@ object Predictor extends App {
   // *** the baseline method ***
   // as explained in the project specification
   def calcRPredBaselineMethod(trainRdd:RDD[Rating], testRdd:RDD[Rating]):RDD[((Int, Int),Double)] = {
+
     // find avgGlobal and ru_s
     val avgGlobal = train.map(r => r.rating).sum()/train.count.toDouble
     val ru_s = train.groupBy(r => r.user).map{
@@ -138,15 +139,15 @@ object Predictor extends App {
     // after reduce: (i, (rhat_ui+rhat_u2i2+..., 1+1+...))
     val rHatBar_i = rdd3.reduceByKey((t1,t2)=>(t1._1+t2._1, t1._2+t2._2)).mapValues{
       case(sum, count) => sum/count.toDouble
-    }
+    }  // (i, rhatbar_i)
 
     // now combine rHatBar_i and ru_ for each entry in the testset
     val rdd4 = test.map{r=>(r.item, r.user)}.leftOuterJoin(rHatBar_i) // (i, (u1, Option(rhatbar_i)))
     val rdd5 = rdd4.map{
       case(i, (u, rbarhat_i)) => (u, (i, rbarhat_i))
     } // (u, (i, Option(rbarhat_i))
-    val rdd6 = rdd5.leftOuterJoin(ru_s) // (   u, ( (i, rbarhat_i/GA), option(ru_) )   )
-     rdd6.map{
+    val rdd6 = rdd5.leftOuterJoin(ru_s) // (   u, ( (i, Option(rbarhat_i)), option(ru_) )   )
+    rdd6.map{
       case( u, (  (i,rbarhat_i), ru  ) ) => ( (u,i), optionalPui(ru, rbarhat_i, avgGlobal) )
     }  // ((u,i), pui)
   }
@@ -156,9 +157,15 @@ object Predictor extends App {
   // Some helper functions for the baseline method
   // generate a prediction for (u,i) using ru_ and rbarhat_i while any of
   // these two inputs might be None, in which case the prediction will be the global average
-  def optionalPui(ru:Option[Double], rbarhat_i:Option[Double], defaultPui:Double):Double = {
-    if (ru.isEmpty || rbarhat_i.isEmpty) {
-      return defaultPui
+  def optionalPui(ru:Option[Double], rbarhat_i:Option[Double], avgGlobal:Double):Double = {
+//    var ruGet = avgGlobal
+//    var rbarhat_iGet = avgGlobal
+    if (ru.isEmpty && rbarhat_i.isEmpty) {
+      return pui(avgGlobal, avgGlobal)
+    } else if (ru.isDefined && rbarhat_i.isEmpty) {
+      return pui(ru.get, avgGlobal)
+    } else if (ru.isEmpty && rbarhat_i.isDefined) {
+      return pui(avgGlobal, rbarhat_i.get)
     } else {
       return pui(ru.get, rbarhat_i.get)
     }
@@ -216,7 +223,7 @@ object Predictor extends App {
   val timeRddBaselineMethod = timeMethod(calcRPredBaselineMethod, train, test)
 
 
-
+// TODO: clean this up
 //  var timeListGlobalMethod = List[Long]()
 //  for (i <- 1 to 10) {
 //    val start = System.nanoTime()
