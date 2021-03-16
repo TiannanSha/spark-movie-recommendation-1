@@ -38,37 +38,39 @@ object Analyzer extends App {
   assert(data.count == 100000, "Invalid data")
 
   // use r to denote Rating class and rating to denote actual numerical rating
+  // TODO refactor code,rename var names
 
-  // Q3.1.1
-  val numRating = data.count
-  val gloAvgRating = data.map(r=>r.rating).sum/numRating
+  // *** Q3.1.1 ***
+  val gloAvgRating = data.map(r=>r.rating).mean
 
-  // Q3.1.2
-  //val avgRatingPerUser = data.groupBy(r=>r.user).map(group => group.map(r=>r.ratings)/group.count )
-  //var avgRatingPerUser = data.groupBy(r => r.user).map{case (user, rs) => (rs.sum/rs.count)}
-  val userRatingsMap = data.groupBy(r => r.user).map{case (user, rs) => (user, rs.map(r=>r.rating))}
-  //userRatingsMap.take(10).foreach(println)
-  val userAvgRatings= userRatingsMap.map{case (user, ratings) => (ratings.sum/ratings.size)}
-  //userAvgRatings.collect.foreach(println)
-  val userAvgRatingsMax = userAvgRatings.max
-  val userAvgRatingsMin = userAvgRatings.min
-  val userAvgRatingsAvg = userAvgRatings.sum/userAvgRatings.count
-  val ratioCloseUser = (userAvgRatings.filter(rating => (rating - userAvgRatingsAvg).abs < 0.5).count.toDouble
-    /userAvgRatings.count)  // *100?
+  // *** Q3.1.2 ***
+  // as per milestone spec, ru_ denotes average rating of user u
+  val ru_s = data.map(  r => (r.user, (r.rating,1))  ) // (u,r) -> (u,[(r1,1), (r2,1)])
+    .reduceByKey( (t1,t2) => (t1._1+t2._1, t1._2+t2._2)) // (u, (r+r+r..., 1+1+1)) = (u, sum/count)
+    .mapValues{ case(sum, count) => sum/count}
+  // final answers
+  val ru_sMin = ru_s.values.min
+  val ru_sMax = ru_s.values.max
+  val ru_sMean = ru_s.values.mean
+  val ratioCloseUser = ru_s.values.filter(
+      r => (r - gloAvgRating).abs < 0.5
+    ).count / ru_s.count.toDouble
   val allCloseUser = (ratioCloseUser==1)
 
-  // Q3.1.3
-  val itemRatingsMap = data.groupBy(r => r.item).map{case (item, rs) => (item, rs.map(r=>r.rating))}
-  //userRatingsMap.take(10).foreach(println)
-  // get a sequence of average ratings for each item
-  val itemAvgRatings= itemRatingsMap.map{case (item, ratings) => (ratings.sum/ratings.size)}
-  println("*****itemAvgRatings*****")
-  itemAvgRatings.collect.foreach(println)
-  val itemAvgRatingsMax = itemAvgRatings.max
-  val itemAvgRatingsMin = itemAvgRatings.min
-  val itemAvgRatingsAvg = itemAvgRatings.sum/itemAvgRatings.count
-  val ratioCloseItem = (itemAvgRatings.filter(rating => (rating - itemAvgRatingsAvg).abs < 0.5).count.toDouble
-    /userAvgRatings.count)  // *100?
+
+  // *** Q3.1.3 ***
+  // as per milestone spec, r_i denotes average rating of item i
+  // r_is is the pural form of r_i...
+  val r_is = data.map(  r => (r.item, (r.rating,1))  ) // (i,r) -> (i,[(r1,1), (r2,1)])
+    .reduceByKey( (t1,t2) => (t1._1+t2._1, t1._2+t2._2)) // (i, (r+r+r..., 1+1+1)) = (i, sum/count)
+    .mapValues{ case(sum, count) => sum/count}
+  // final answers
+  val r_isMin = r_is.values.min
+  val r_isMax = r_is.values.max
+  val r_isMean = r_is.values.mean
+  val ratioCloseItem = r_is.values.filter(
+    r => (r - gloAvgRating).abs < 0.5
+  ).count / r_is.count.toDouble
   val allCloseItem = (ratioCloseItem==1)
 
   // Save answers as JSON
@@ -94,9 +96,9 @@ object Analyzer extends App {
             "UsersAverageRating" -> Map(
                 // Using as your input data the average rating for each user,
                 // report the min, max and average of the input data.
-                "min" -> userAvgRatingsMin,  // Datatype of answer: Double
-                "max" -> userAvgRatingsMax, // Datatype of answer: Double
-                "average" -> userAvgRatingsAvg // Datatype of answer: Double
+                "min" -> ru_sMin,  // Datatype of answer: Double
+                "max" -> ru_sMax, // Datatype of answer: Double
+                "average" -> ru_sMean // Datatype of answer: Double
             ),
             "AllUsersCloseToGlobalAverageRating" -> allCloseUser, // Datatype of answer: Boolean
             "RatioUsersCloseToGlobalAverageRating" -> ratioCloseUser // Datatype of answer: Double
@@ -105,9 +107,9 @@ object Analyzer extends App {
             "ItemsAverageRating" -> Map(
                 // Using as your input data the average rating for each item,
                 // report the min, max and average of the input data.
-                "min" -> itemAvgRatingsMin,  // Datatype of answer: Double
-                "max" -> itemAvgRatingsMax, // Datatype of answer: Double
-                "average" -> itemAvgRatingsAvg // Datatype of answer: Double
+                "min" -> r_isMin,  // Datatype of answer: Double
+                "max" -> r_isMax, // Datatype of answer: Double
+                "average" -> r_isMean // Datatype of answer: Double
             ),
             "AllItemsCloseToGlobalAverageRating" -> allCloseItem, // Datatype of answer: Boolean
             "RatioItemsCloseToGlobalAverageRating" -> ratioCloseItem // Datatype of answer: Double
