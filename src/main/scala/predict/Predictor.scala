@@ -46,7 +46,7 @@ object Predictor extends App {
   }) 
   assert(test.count == 20000, "Invalid test data")
 
-  val globalPred = 3.0 // What is this??
+  val globalPred = 3.0
   val globalMae = test.map(r => scala.math.abs(r.rating - globalPred)).reduce(_+_) / test.count.toDouble
 
 
@@ -54,13 +54,10 @@ object Predictor extends App {
   // ***        Q3.1.4        ***
   // ****************************
 
-  // Note that some intermediate results could have been reused, but for accurately measuring time cost
-  // in Q3.1.5, they are not reused
-  val yTrue = test.map(r =>  r.rating)
+  // ((u,i),r), where r is the predicted rating
   val rTrue = test.map(r => ((r.user, r.item),r.rating))
-  assert(rTrue.count == test.count)
 
-  // both rTrue and rPred are in the form of ((u, i), r), (u,i) is the unique key
+  // both rTrue and rPred are in the form of ((u, i), r), where (u,i) is the unique key
   // rTure's r is the actual rating, rPred's r is the predicted rating
   def maeUIR(rTrue:RDD[((Int, Int), Double)], rPred:RDD[((Int, Int), Double)]): Double = {
     assert(rTrue.count == rPred.count)
@@ -82,7 +79,7 @@ object Predictor extends App {
   val maeGlobalMethod = maeUIR(rTrue, rPredGlobal)
 
   // *** Average Per User Method ***
-  // for a test (u,i), if there ratings in training set with same u
+  // for a test set entry (u,i), if there are ratings in the training set with same u
   // then use the average of such ratings to predict, otherwise use global average
   def calcRPredPerUserMethod(train:RDD[Rating], test:RDD[Rating]):RDD[((Int, Int),Double)] = {
     val avgGlobal = train.map(r => r.rating).sum()/train.count.toDouble
@@ -101,7 +98,7 @@ object Predictor extends App {
 
 
   // *** per item method ***
-  // for a test (u,i), if there ratings in training set with same i
+  // for a test set entry (u,i), if there are ratings in training set with same i
   // then use the average of such ratings to predict, otherwise use global average
   def calcRPredPerItemMethod(train:RDD[Rating], test:RDD[Rating]):RDD[((Int, Int),Double)] = {
     // (i, [Rating]) ->  (i, [r]) -> (i, [r].sum/r.size)
@@ -119,38 +116,7 @@ object Predictor extends App {
   val rPredPerItemMethod = calcRPredPerItemMethod(train, test)
   val maePerItemMethod = maeUIR(rTrue, rPredPerItemMethod)
 
-  //TODO: delete redundant rdd12345 variables change it to new line .func()
-  // *** the baseline method ***
-  // as explained in the project specification
-//  def calcRPredBaselineMethod(train:RDD[Rating], test:RDD[Rating]):RDD[((Int, Int),Double)] = {
-//
-//    // find avgGlobal and ru_s
-//    val avgGlobal = train.map(r => r.rating).sum()/train.count.toDouble
-//    val ru_s = train.groupBy(r => r.user).map{
-//      case (user, rs) => (user, rs.map(r=>r.rating).sum / rs.size.toDouble)
-//    }  // (u, ru_)
-//
-//    // find rHatBar_i for all is
-//    val rdd1 = train.map(r=>(r.user, (r.item, r.rating)))   // entry: (u, (i, rui))
-//    val rdd2 = rdd1.join(ru_s)  // entry (u, ((i, rui), ru_))
-//    val rdd3 = rdd2.map{case(  u, ((i, rui),ru_)  ) => ( i, (normalDevi(rui,ru_),1) )} // (i, (rhat_ui, 1))
-//    // after groupby it's (i, [(rhat_u1_i,1), (rhat_u2_i,1), ...])
-//    // for better performance we reduce directly
-//    // after reduce: (i, (rhat_ui+rhat_u2i2+..., 1+1+...))
-//    val rHatBar_i = rdd3.reduceByKey((t1,t2)=>(t1._1+t2._1, t1._2+t2._2)).mapValues{
-//      case(sum, count) => sum/count.toDouble
-//    }  // (i, rhatbar_i)
-//
-//    // now combine rHatBar_i and ru_ for each entry in the testset
-//    val rdd4 = test.map{r=>(r.item, r.user)}.leftOuterJoin(rHatBar_i) // (i, (u1, Option(rhatbar_i)))
-//    val rdd5 = rdd4.map{
-//      case(i, (u, rbarhat_i)) => (u, (i, rbarhat_i))
-//    } // (u, (i, Option(rbarhat_i))
-//    val rdd6 = rdd5.leftOuterJoin(ru_s) // (   u, ( (i, Option(rbarhat_i)), option(ru_) )   )
-//    rdd6.map{
-//      case( u, (  (i,rbarhat_i), ru  ) ) => ( (u,i), optionalPui(ru, rbarhat_i, avgGlobal) )
-//    }  // ((u,i), pui)
-//  }
+
   // *** the baseline method ***
   // as explained in the project specification
   def calcRPredBaselineMethod(train:RDD[Rating], test:RDD[Rating]):RDD[((Int, Int),Double)] = {
@@ -161,7 +127,7 @@ object Predictor extends App {
       case (user, rs) => (user, rs.map(r=>r.rating).sum / rs.size.toDouble)
     }  // (u, ru_)
 
-    // find rHatBar_i for all is
+    // find rHatBar_i for all i
     val rdd1 = train.map(r=>(r.user, (r.item, r.rating)))   // entry: (u, (i, rui))
       .join(ru_s)  // entry (u, ((i, rui), ru_))
       .map{case(  u, ((i, rui),ru_)  ) => ( i, (normalDevi(rui,ru_),1) )} // (i, (rhat_ui, 1))
@@ -186,10 +152,8 @@ object Predictor extends App {
 
   // Some helper functions for the baseline method
   // generate a prediction for (u,i) using ru_ and rbarhat_i while any of
-  // these two inputs might be None, in which case the prediction will be the global average
+  // these two inputs might be None. If any argument is None, replace it with global average
   def optionalPui(ru:Option[Double], rbarhat_i:Option[Double], avgGlobal:Double):Double = {
-//    var ruGet = avgGlobal
-//    var rbarhat_iGet = avgGlobal
     if (ru.isEmpty && rbarhat_i.isEmpty) {
       return pui(avgGlobal, avgGlobal)
     } else if (ru.isDefined && rbarhat_i.isEmpty) {
@@ -216,23 +180,24 @@ object Predictor extends App {
       5-ru
     } else if (x<ru) {
       ru-1
-    }else {
+    } else {
       1
     }
   }
+
 
   // ****************************
   // ***        Q3.1.5        ***
   // ****************************
 
-  // for a given predictive method, run it for turn times, time each run and
-  // return ten durations in a RDD[Long] in microseconds
+  // for a given predictive method, run it for ten times, calculate the time for each run
+  // and return ten durations in a RDD[Long] in microseconds
   def timeMethod(methodFunc:(RDD[Rating], RDD[Rating])=>RDD[((Int, Int), Double)],
                 train:RDD[Rating], test:RDD[Rating]) : RDD[Double] = {
     var timeListGlobalMethod = List[Double]()
     for (i <- 1 to 10) {
       val start = System.nanoTime()
-      methodFunc(train, test)
+      val sum = methodFunc(train, test).values.sum
       val end = System.nanoTime()
       // divide by 1000 to turn nano seconds to microseconds
       timeListGlobalMethod = timeListGlobalMethod :+ (end-start)/1000.0
@@ -252,26 +217,6 @@ object Predictor extends App {
   // *** measure baseline method's duration ***
   val timeRddBaselineMethod = timeMethod(calcRPredBaselineMethod, train, test)
 
-
-// TODO: clean this up
-//  var timeListGlobalMethod = List[Long]()
-//  for (i <- 1 to 10) {
-//    val start = System.nanoTime()
-//    calcRPredGlobal(train, test)
-//    val end = System.nanoTime()
-//    timeListGlobalMethod = timeListGlobalMethod :+ (end-start)
-//  }
-//  val timeRddGlobalMethod = spark.sparkContext.parallelize(timeListGlobalMethod)
-
-  // *** measure per user method's duration ***
-//  var timeListPerUserMethod = List[Long]()
-//  for (i <- 1 to 10) {
-//    val start = System.nanoTime()
-//    calcRPredGlobal(train, test)
-//    val end = System.nanoTime()
-//    timeListPerUserMethod = timeListPerUserMethod :+ (end-start)
-//  }
-//  val timeRddPerUserMethod = spark.sparkContext.parallelize(timeListPerUserMethod)
 
   // Save answers as JSON
   def printToFile(content: String, 
@@ -322,7 +267,8 @@ object Predictor extends App {
                 "stddev" -> timeRddBaselineMethod.stdev // Datatype of answer: Double
               ),
               "RatioBetweenBaselineMethodAndGlobalMethod" -> (
-                timeRddBaselineMethod.mean/timeRddGlobalMethod.mean) // Datatype of answer: Double
+                timeRddBaselineMethod.mean/timeRddGlobalMethod.mean
+                ) // Datatype of answer: Double
             ),
          )
         json = Serialization.writePretty(answers)

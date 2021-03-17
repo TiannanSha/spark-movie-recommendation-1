@@ -37,9 +37,6 @@ object Analyzer extends App {
   }) 
   assert(data.count == 100000, "Invalid data")
 
-  // use r to denote Rating class and rating to denote actual numerical rating
-  // TODO refactor code,rename var names
-
   // *** Q3.1.1 ***
   val gloAvgRating = data.map(r=>r.rating).mean
 
@@ -55,6 +52,7 @@ object Analyzer extends App {
   val ratioCloseUser = ru_s.values.filter(
       r => (r - gloAvgRating).abs < 0.5
     ).count / ru_s.count.toDouble
+  // if all users are close to the global average, the ratio should be 1.
   val allCloseUser = (ratioCloseUser==1)
 
 
@@ -71,6 +69,7 @@ object Analyzer extends App {
   val ratioCloseItem = r_is.values.filter(
     r => (r - gloAvgRating).abs < 0.5
   ).count / r_is.count.toDouble
+  // if all items are close to the global average, the ratio should be 1.
   val allCloseItem = (ratioCloseItem==1)
 
   // Save answers as JSON
